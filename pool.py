@@ -61,7 +61,12 @@ class Worker:
         self.cool = 0.0
         self.pending = 0
         self.ok = 0
-        self.last_call = 0.0
+        # у каждого воркера свой темп: FloodWait считается на аккаунт/бота,
+        # поэтому скорость пула = сумма скоростей воркеров (больше воркеров — быстрее)
+        mult = 1.5 if kind == "user" else 1.0
+        self.base = {"resolve": cfg.RESOLVE_PACE * mult, "confirm": cfg.CONFIRM_PACE}
+        self.pace = dict(self.base)
+        self.next_at = {"resolve": 0.0, "confirm": 0.0}
 
 
 class Pool:
@@ -71,30 +76,6 @@ class Pool:
         self.fresh: dict[str, tuple[str, float]] = {}
         self.sem = asyncio.Semaphore(96)
         self.total = 0
-        # глобальный «шлюз темпа»: строгий интервал между запросами одного типа,
-        # иначе Telegram даёт FloodWait всему пулу разом
-        self.pace = {"resolve": cfg.RESOLVE_PACE, "confirm": cfg.CONFIRM_PACE}
-        self._base_pace = dict(self.pace)
-        self._gates = {k: asyncio.Lock() for k in self.pace}
-        self._last = {k: 0.0 for k in self.pace}
-
-    def _tighten(self, kind: str | None):
-        """FloodWait получен — увеличиваем интервал."""
-        if kind:
-            self.pace[kind] = min(self.pace[kind] * 1.5, 10.0)
-
-    def _decay(self, kind: str | None):
-        """Запросы идут чисто — медленно возвращаемся к базовому темпу."""
-        if kind:
-            self.pace[kind] = max(self._base_pace[kind], self.pace[kind] * 0.98)
-
-    async def _gate(self, kind: str):
-        """Пропускает не чаще одного запроса каждые pace[kind] секунд (по всему пулу)."""
-        async with self._gates[kind]:
-            wait = self._last[kind] + self.pace[kind] - time.monotonic()
-            if wait > 0:
-                await asyncio.sleep(wait)
-            self._last[kind] = time.monotonic()
 
     # ───────── запуск ─────────
     async def start(self):
@@ -144,30 +125,36 @@ class Pool:
         return [w for w in self.workers if w.kind == "user"]
 
     # ───────── низкий уровень ─────────
-    async def _call(self, kinds, factory, gate: str | None = None):
-        """Выполняет запрос на наименее загруженном воркере.
+    async def _call(self, kinds, factory, gate: str):
+        """Запрос на воркере, который освободится раньше всех (с учётом его личного темпа).
         -> ('ok', result) | ('err', exc) | ('flood', None)"""
         for _ in range(8):
             cands = [w for w in self.workers if w.kind in kinds and w.cool <= time.time()]
             if not cands:
                 soonest = min((w.cool for w in self.workers if w.kind in kinds), default=time.time())
-                await asyncio.sleep(min(max(soonest - time.time(), 0.1), 10))
+                wait = soonest - time.time()
+                if wait > 20:                       # все на длинной паузе — не висим, сообщаем о лимите
+                    return "flood", None
+                await asyncio.sleep(max(wait, 0.1))
                 continue
-            w = min(cands, key=lambda x: x.last_call)   # равномерно по всем воркерам
-            if gate:
-                await self._gate(gate)
-            w.last_call = time.monotonic()
+            now = time.monotonic()
+            w = min(cands, key=lambda x: max(now, x.next_at[gate]))
+            slot = max(now, w.next_at[gate])          # бронируем слот сразу, без await между выбором и бронью
+            w.next_at[gate] = slot + w.pace[gate]
+            if slot > now:
+                await asyncio.sleep(slot - now)
             w.pending += 1
             try:
                 async with w.lock:
                     try:
                         r = await w.client(factory())
                         w.ok += 1
-                        self._decay(gate)
+                        w.pace[gate] = max(w.base[gate], w.pace[gate] * 0.98)   # плавно возвращаемся к базовому темпу
                         return "ok", r
                     except errors.FloodWaitError as e:
                         w.cool = time.time() + e.seconds + 1
-                        self._tighten(gate)
+                        w.pace[gate] = min(w.pace[gate] * 1.5, 10.0)             # при флуде замедляемся
+                        w.next_at[gate] = time.monotonic() + e.seconds + 1
                         log.warning("FloodWait %ss на %s", e.seconds, w.name)
                     except Exception as e:
                         return "err", e
@@ -225,6 +212,8 @@ class Pool:
                 return "taken"
             if s in ("invalid", "error"):
                 return s
+            if s == "flood" and not self.users:
+                return "flood"                      # без аккаунтов подтвердить нечем — не выдаём ложный «свободен»
             res = await self._confirm(name)  # maybe или flood резолверов -> точная проверка
         if res == "taken":
             self._mark_taken(name)
@@ -241,35 +230,71 @@ class Pool:
     async def check_many(self, names, fresh: bool = False) -> list[str]:
         return await asyncio.gather(*[self.check(n, fresh) for n in names])
 
-    async def hunt(self, source, want: int = 1, max_checks: int = 400, on_progress=None):
-        """source: функция-генератор или список имён (проверяется по порядку).
+    async def _one(self, n: str):
+        try:
+            return n, await self.check(n)
+        except Exception:
+            log.exception("check %s", n)
+            return n, "error"
+
+    async def hunt(self, source, want: int = 1, max_checks: int = 3000, on_progress=None,
+                   stop=None, max_seconds: float | None = None):
+        """source: функция-генератор или список имён (по порядку). Результаты обрабатываются по мере готовности:
+        нашли нужное число — сразу выходим. Ограничения: max_checks, max_seconds, stop().
         -> {'found': [...], 'checked': N, 'flood': bool, 'elapsed': сек}"""
+        max_seconds = max_seconds or cfg.SEARCH_MAX_SECONDS
         t0 = time.perf_counter()
-        batch = max(8, min(24, len(self.workers) * 4))   # темп задаёт шлюз, пачка — лишь очередь
+        timeup = lambda: time.perf_counter() - t0 > max_seconds or bool(stop and stop())
+        batch = max(4, min(16, len(self.workers) * 3))
         found, seen, checked, flood = [], set(), 0, False
-        idx, tries = 0, 0
-        while checked < max_checks and len(found) < want:
+        idx = empty = 0
+        while checked < max_checks and len(found) < want and not timeup():
             names = []
             if callable(source):
-                while len(names) < batch and tries < batch * 30:
+                tries = 0                                   # счётчик попыток — на каждую пачку отдельно
+                while len(names) < batch and tries < batch * 40:
                     tries += 1
                     n = source()
                     if n not in seen and self.taken.get(n, 0) <= time.time():
                         seen.add(n)
                         names.append(n)
+                if not names:
+                    empty += 1
+                    if empty >= 3:                          # генератор исчерпал новые варианты
+                        break
+                    continue
+                empty = 0
             else:
-                names = [n for n in source[idx: idx + batch] if self.taken.get(n, 0) <= time.time()]
+                chunk = source[idx: idx + batch]
                 idx += batch
-            if not names:
-                break
-            res = await self.check_many(names)
-            checked += len(names)
-            found += [n for n, r in zip(names, res) if r == "free"]
-            if res.count("flood") == len(res):
+                if not chunk:
+                    break
+                names = [n for n in chunk if self.taken.get(n, 0) <= time.time()]
+                if not names:
+                    continue
+            tasks = [asyncio.ensure_future(self._one(n)) for n in names]
+            done = fl = 0
+            try:
+                for fut in asyncio.as_completed(tasks):
+                    n, r = await fut
+                    checked += 1
+                    done += 1
+                    if r == "free":
+                        found.append(n)
+                    elif r == "flood":
+                        fl += 1
+                    if on_progress:
+                        await on_progress(checked, len(found), checked / max(time.perf_counter() - t0, 0.01))
+                    if len(found) >= want or timeup():
+                        break
+            finally:
+                for t in tasks:
+                    if not t.done():
+                        t.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+            if done and fl == done:
                 flood = True
                 break
-            if on_progress:
-                await on_progress(checked, len(found), checked / max(time.perf_counter() - t0, 0.01))
         return {"found": found[:want], "checked": checked, "flood": flood,
                 "elapsed": time.perf_counter() - t0}
 

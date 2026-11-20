@@ -69,8 +69,10 @@ TRACK_SLOW_EVERY = 6           # обычные ники проверяются 
 
 # ── Темп запросов (защита от FloodWait; при флуде растёт автоматически) ───
 # Telegram эскалирует жёстко: 48с → часы → сутки. Не задирать темп!
-RESOLVE_PACE = float(os.getenv("RESOLVE_PACE", "1.2"))   # сек между resolveUsername по всему пулу
-CONFIRM_PACE = float(os.getenv("CONFIRM_PACE", "3.0"))   # сек между account.checkUsername
+# Темп НА ОДНОГО воркера (у юзер-аккаунта ×1.5): скорость пула = сумма темпов воркеров.
+RESOLVE_PACE = float(os.getenv("RESOLVE_PACE", "1.2"))   # сек между resolveUsername на воркера
+CONFIRM_PACE = float(os.getenv("CONFIRM_PACE", "3.0"))   # сек между account.checkUsername на аккаунт
+SEARCH_MAX_SECONDS = float(os.getenv("SEARCH_MAX_SECONDS", "240"))   # максимум времени на один поиск
 
 # ── Быстрый поиск ────────────────────────────────────────────────────────
 FAST_COST = 5                 # 💎 за прогон для тех, у кого нет права бесплатного

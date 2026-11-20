@@ -81,3 +81,10 @@ def rate_card(name: str, status: str, ai: str = "") -> str:
     if ai:
         s += f"\n\n<blockquote>{ai}</blockquote>"
     return s
+
+
+def not_found(checked: int, elapsed: float, length: int) -> str:
+    tip = ("\n\n<blockquote>5-буквенные ники почти все заняты. Попробуй 6–7 букв: шансов намного больше.</blockquote>"
+           if length <= 5 else "")
+    return (head("◇", "Пока пусто") +
+            f"Проверено <b>{checked}</b> за {elapsed:.0f} с. Нажми «ЕЩЁ», поиск продолжится.{tip}")

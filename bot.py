@@ -38,6 +38,7 @@ SEL: dict[int, str] = {}       # выбранная длина: "5" | "6" | "cus
 CUSTOM: dict[int, int] = {}    # своя длина 7–15
 BUSY: set[int] = set()
 AUTO: dict[int, asyncio.Task] = {}
+STOP: set[int] = set()         # пользователи, нажавшие «Остановить» во время поиска
 SEARCH_CD: dict[int, float] = {}   # конец последнего поиска — для личного интервала
 _HAS_STYLE = "style" in InlineKeyboardButton.model_fields   # цветные кнопки (Bot API 9.4+)
 
@@ -144,7 +145,10 @@ def back(to="search", text="◂ НАЗАД"):
     return KB([B(text, to)])
 
 
-def make_progress(msg: Message):
+STOP_KB = KB([B("✕ ОСТАНОВИТЬ", "stop")])
+
+
+def make_progress(msg: Message, stop_btn: bool = False):
     last = [0.0]
 
     async def p(checked, found, rate):
@@ -152,10 +156,16 @@ def make_progress(msg: Message):
             return
         last[0] = time.monotonic()
         try:
-            await msg.edit_text(ui.searching(checked, rate))
+            await msg.edit_text(ui.searching(checked, rate), reply_markup=STOP_KB if stop_btn else None)
         except TelegramBadRequest:
             pass
     return p
+
+
+@router.callback_query(F.data == "stop")
+async def stop_search(cb: CallbackQuery):
+    STOP.add(cb.from_user.id)
+    await cb.answer("Останавливаю…")
 
 
 async def ai_comment(name: str, sc: int) -> str:
@@ -401,20 +411,21 @@ async def go(cb: CallbackQuery):
     BUSY.add(uid)
     await cb.answer()
     try:
-        await edit(cb, ui.searching(0))
+        await edit(cb, ui.searching(0), STOP_KB)
         u = db.user(uid)
         f, length = flt(u), cur_len(uid)
         want = cfg.PREMIUM_RESULTS if is_prem(uid) else cfg.FREE_RESULTS
-        res = await pool.hunt(lambda: gen_one(length, **f), want, 600, make_progress(cb.message))
+        res = await pool.hunt(lambda: gen_one(length, **f), want, 600,
+                              make_progress(cb.message, True), stop=lambda: uid in STOP)
     finally:
         BUSY.discard(uid)
         SEARCH_CD[uid] = time.monotonic()
+        STOP.discard(uid)
     if res["flood"]:
-        return await edit(cb, ui.head("⏳", "Лимит Telegram") +
+        return await edit(cb, ui.head("◇", "Лимит Telegram") +
                           "Проверки временно ограничены. Попробуй через пару минут.", back())
     if not res["found"]:
-        return await edit(cb, ui.head("😕", "Ничего не найдено") +
-                          f"Проверено <b>{res['checked']}</b> за {res['elapsed']:.1f} с. Попробуй ещё раз.",
+        return await edit(cb, ui.not_found(res["checked"], res["elapsed"], length),
                           KB([B("◼ ЕЩЁ", "go")], [B("◂ НАЗАД", "search")]))
     if left is not None:
         db.add_usage(uid, b)
@@ -446,21 +457,21 @@ async def fast_go(cb: CallbackQuery):
     BUSY.add(uid)
     await cb.answer()
     try:
-        await edit(cb, ui.searching(0))
+        await edit(cb, ui.searching(0), STOP_KB)
         f, length = flt(u), cur_len(uid)
         res = await pool.hunt(lambda: gen_one(length, **f), cfg.PREMIUM_RESULTS, 600,
-                              make_progress(cb.message))
+                              make_progress(cb.message, True), stop=lambda: uid in STOP)
         if not free_fast:
             db.add(uid, "diamonds", -cfg.FAST_COST)
     finally:
         BUSY.discard(uid)
         SEARCH_CD[uid] = time.monotonic()
+        STOP.discard(uid)
     if res["flood"]:
         return await edit(cb, ui.head("◇", "Лимит Telegram") +
                           "Проверки временно ограничены. Попробуй через пару минут.", back())
     if not res["found"]:
-        return await edit(cb, ui.head("◇", "Ничего не найдено") +
-                          f"Проверено <b>{res['checked']}</b> за {res['elapsed']:.1f} с. Попробуй ещё раз.",
+        return await edit(cb, ui.not_found(res["checked"], res["elapsed"], length),
                           KB([B("◼ ЕЩЁ", "fast")], [B("◂ НАЗАД", "search")]))
     if not free_fast:
         db.add(uid, "searches", 1)
@@ -475,9 +486,10 @@ async def auto_loop(bot: Bot, uid: int, chat_id: int):
     try:
         while found < 10:
             f, length = flt(db.user(uid)), cur_len(uid)
-            res = await pool.hunt(lambda: gen_one(length, **f), 1, 1500)
+            res = await pool.hunt(lambda: gen_one(length, **f), 1, 5000,
+                                  stop=lambda: uid not in AUTO)
             if res["flood"]:
-                await bot.send_message(chat_id, ui.head("⏳", "Автопоиск остановлен") + "Лимит Telegram, попробуй позже.")
+                await bot.send_message(chat_id, ui.head("◇", "Автопоиск остановлен") + "Лимит Telegram, попробуй позже.")
                 return
             for n in res["found"]:
                 found += 1
@@ -551,11 +563,13 @@ async def ultra_go(cb: CallbackQuery):
     BUSY.add(uid)
     await cb.answer()
     try:
-        await edit(cb, ui.searching(0))
+        await edit(cb, ui.searching(0), STOP_KB)
         cands = [c for c in ultra_candidates(n) if score(c) >= cfg.ULTRA_MIN_SCORE[n]]
-        res = await pool.hunt(cands, 1, len(cands) or 1, make_progress(cb.message))
+        res = await pool.hunt(cands, 1, len(cands) or 1,
+                              make_progress(cb.message, True), stop=lambda: uid in STOP)
     finally:
         BUSY.discard(uid)
+        STOP.discard(uid)
     kb_back = back("ultra", "◂ К УЛЬТРА")
     if not res["found"]:
         return await edit(cb, ui.head("◇", "Сейф пуст") +
