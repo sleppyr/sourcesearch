@@ -773,10 +773,11 @@ async def promo(cb: CallbackQuery, state: FSMContext):
 
 @router.message(F_.promo)
 async def got_promo(m: Message, state: FSMContext):
+    await state.clear()
     r = db.promo_redeem(m.from_user.id, m.text or "")
     if r is None:
-        return await m.answer("Промокод не найден или закончился. Попробуй другой.")
-    await state.clear()
+        return await m.answer("Промокод не найден или закончился. Попробуй другой.",
+                              reply_markup=KB([B("← Бонусы", "bonus")]))
     if r == "used":
         return await m.answer("Ты уже активировал этот промокод.", reply_markup=KB([B("← Бонусы", "bonus")]))
     names = {"diamonds": "💎 алмазов", "coins": "🪙 монет", "premium": "дн. Premium 👑"}
@@ -797,7 +798,10 @@ def gv_card(g, uid: int) -> str:
 async def gv(cb: CallbackQuery):
     uid = cb.from_user.id
     items = db.gv_active()
-    await cb.answer()
+    try:
+        await cb.answer()
+    except TelegramBadRequest:
+        pass   # повторный ответ при обновлении после «Участвовать»
     text = ui.head("🏆", "Розыгрыши", "призы: NFT-юзернеймы и Premium") + (
         "\n\n".join(gv_card(g, uid) for g in items) or "<i>Сейчас активных розыгрышей нет. Загляни позже.</i>")
     rows = [[B(("✅ Вы участвуете" if uid in db.gv_parts(g['id']) else "🎟 Участвовать") + f" · {g['title'][:22]}", f"gv:join:{g['id']}",
