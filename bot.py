@@ -228,8 +228,9 @@ async def to_menu(cb: CallbackQuery, state: FSMContext):
 # ───────────────────────── раздел «Поиск» ─────────────────────────
 def search_kb(uid: int):
     lock = "" if is_prem(uid) else "🔒 "
+    fast = "⚡ БЫСТРЫЙ ПОИСК · БЕСПЛАТНО" if fast_free(uid) else f"⚡ БЫСТРЫЙ ПОИСК · {cfg.FAST_COST} 💎"
     return KB(
-        [B("⚡ БЫСТРЫЙ ПОИСК", "fast")],
+        [B(fast, "fast")],
         [B("◼ ПОДБОР НИКА", "pick")],
         [B(f"{lock}ПО СЛОВУ", "gate:word"), B(f"{lock}ЛОВУШКА", "gate:trap")],
         [B("◆ УЛЬТРА-ПОИСК", "ultra")],
@@ -241,7 +242,8 @@ def search_kb(uid: int):
 
 def search_text(uid: int) -> str:
     left, lim = quota(uid, SEL.get(uid, "5"))
-    return ui.search_home(db.user(uid), left, lim, is_prem(uid))
+    note = "бесплатно · тариф" if fast_free(uid) else f"{cfg.FAST_COST} 💎 за прогон"
+    return ui.search_home(db.user(uid), left, lim, is_prem(uid), note)
 
 
 @router.callback_query(F.data == "search")
@@ -354,7 +356,7 @@ def result_kb(names):
     return KB(*rows)
 
 
-@router.callback_query(F.data.in_({"go", "fast"}))
+@router.callback_query(F.data == "go")
 async def go(cb: CallbackQuery):
     uid = cb.from_user.id
     b = SEL.get(uid, "5")
@@ -388,6 +390,47 @@ async def go(cb: CallbackQuery):
     db.add(uid, "searches", 1)
     await edit(cb, ui.result_card(res["found"], res["checked"], res["elapsed"],
                                   qtxt(uid, b) if left is not None else ""), result_kb(res["found"]))
+
+
+def fast_free(uid: int) -> bool:
+    """Быстрый поиск бесплатен для админов и подписок от FAST_MIN_DAYS."""
+    return uid in cfg.ADMIN_IDS or (is_prem(uid) and db.user(uid)["fast_pass"])
+
+
+@router.callback_query(F.data == "fast")
+async def fast_go(cb: CallbackQuery):
+    uid = cb.from_user.id
+    if uid in BUSY:
+        return await cb.answer("Поиск уже идёт…")
+    u = db.user(uid)
+    free_fast = fast_free(uid)
+    if not free_fast and u["diamonds"] < cfg.FAST_COST:
+        return await cb.answer(f"Быстрый поиск: {cfg.FAST_COST} 💎 за прогон. Или Premium от "
+                               f"{cfg.FAST_MIN_DAYS} дней — тогда бесплатно.", show_alert=True)
+    BUSY.add(uid)
+    await cb.answer()
+    try:
+        await edit(cb, ui.searching(0))
+        f, length = flt(u), cur_len(uid)
+        res = await pool.hunt(lambda: gen_one(length, **f), cfg.PREMIUM_RESULTS, 600,
+                              make_progress(cb.message))
+        if not free_fast:
+            db.add(uid, "diamonds", -cfg.FAST_COST)
+    finally:
+        BUSY.discard(uid)
+    if res["flood"]:
+        return await edit(cb, ui.head("◇", "Лимит Telegram") +
+                          "Проверки временно ограничены. Попробуй через пару минут.", back())
+    if not res["found"]:
+        return await edit(cb, ui.head("◇", "Ничего не найдено") +
+                          f"Проверено <b>{res['checked']}</b> за {res['elapsed']:.1f} с. Попробуй ещё раз.",
+                          KB([B("◼ ЕЩЁ", "fast")], [B("◂ НАЗАД", "search")]))
+    if not free_fast:
+        db.add(uid, "searches", 1)
+    db.add(uid, "found", len(res["found"]))
+    note = "" if free_fast else f"\n▸ Списано  💎 <b>{cfg.FAST_COST}</b>"
+    await edit(cb, ui.result_card(res["found"], res["checked"], res["elapsed"], "") + note,
+               result_kb(res["found"]))
 
 
 async def auto_loop(bot: Bot, uid: int, chat_id: int):
@@ -880,8 +923,10 @@ async def tariffs(cb: CallbackQuery):
     await cb.answer()
     u = db.user(cb.from_user.id)
     text = (ui.head("▮", "Подписка") +
-            "Премиум открывает всё: авто-подборы без ограничений, по слову, ловушка, автопоиск, "
-            f"до {cfg.PREMIUM_RESULTS} ников за подбор.\n\n")
+            "Премиум открывает всё: по слову, ловушка, автопоиск, до "
+            f"{cfg.PREMIUM_RESULTS} ников за подбор.\n"
+            f"Быстрый поиск: {cfg.FAST_COST} 💎 за прогон, но <b>бесплатно и без счётчика</b> "
+            f"на тарифах от {cfg.FAST_MIN_DAYS} дней.\n\n")
     for key, short, title, days, stars, tag in cfg.PREMIUM_PLANS:
         mark = f"  ◄ <i>{tag}</i>" if tag else ""
         if key == "trial" and u["trial_used"]:
@@ -939,6 +984,8 @@ async def paid(m: Message):
     db.add_premium(uid, days)
     if p == "trial":
         db.set(uid, trial_used=1)
+    if days >= cfg.FAST_MIN_DAYS:
+        db.set(uid, fast_pass=1)   # тарифы от 30 дней: быстрый поиск бесплатно
     life = days >= cfg.LIFETIME_DAYS
     await m.answer(ui.head("▮", "Подписка активирована") +
                    ("<b>НАВСЕГДА.</b> Все ограничения сняты. Пользуйся." if life else

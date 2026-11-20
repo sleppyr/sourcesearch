@@ -70,3 +70,7 @@ TRACK_SLOW_EVERY = 6           # обычные ники проверяются 
 # ── Темп запросов (защита от FloodWait; при флуде растёт автоматически) ───
 RESOLVE_PACE = float(os.getenv("RESOLVE_PACE", "1.0"))   # сек между resolveUsername по всему пулу
 CONFIRM_PACE = float(os.getenv("CONFIRM_PACE", "1.5"))   # сек между account.checkUsername
+
+# ── Быстрый поиск ────────────────────────────────────────────────────────
+FAST_COST = 5                 # 💎 за прогон для тех, у кого нет права бесплатного
+FAST_MIN_DAYS = 30            # тарифы от этого срока получают быстрый поиск бесплатно
