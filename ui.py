@@ -42,10 +42,11 @@ def main_caption() -> str:
             "▼ Разделы ниже")
 
 
-def search_home(u, left, lim, prem, fast_note="") -> str:
+def search_home(u, left, lim, prem, fast_note="", interval_note="") -> str:
     return (head("▮", "Охота за юзернеймами") +
             f"▸ Подборы     {quota_line(left, lim)}\n"
             f"▸ Быстрый     {fast_note}\n"
+            f"▸ Интервал     {interval_note or '—'}\n"
             f"▸ Алмазы        💎 <b>{u['diamonds']}</b>\n"
             f"▸ Монеты        🪙 <b>{u['coins']}</b>" + ("\n\n<i>Подписка активна</i>" if prem else ""))
 

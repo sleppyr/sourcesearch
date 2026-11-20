@@ -38,6 +38,7 @@ SEL: dict[int, str] = {}       # выбранная длина: "5" | "6" | "cus
 CUSTOM: dict[int, int] = {}    # своя длина 7–15
 BUSY: set[int] = set()
 AUTO: dict[int, asyncio.Task] = {}
+SEARCH_CD: dict[int, float] = {}   # конец последнего поиска — для личного интервала
 _HAS_STYLE = "style" in InlineKeyboardButton.model_fields   # цветные кнопки (Bot API 9.4+)
 
 
@@ -104,6 +105,36 @@ def cur_len(uid: int) -> int:
 
 def flt(u) -> dict:
     return {"pin": u["pin"], "digits": bool(u["digits"]), "underscore": bool(u["underscore"])}
+
+
+def user_interval(uid: int) -> float:
+    """Личный интервал между поисками: чем серьёзнее тариф, тем меньше."""
+    if uid in cfg.ADMIN_IDS:
+        return cfg.PLAN_INTERVALS[36500]
+    u = db.user(uid)
+    if not DB.is_premium(u):
+        return random.uniform(*cfg.FREE_SEARCH_INTERVAL)
+    return cfg.PLAN_INTERVALS.get(u["best_days"], cfg.DEFAULT_PLAN_INTERVAL)
+
+
+def interval_label(uid: int) -> str:
+    if uid in cfg.ADMIN_IDS:
+        return "0.5 с"
+    u = db.user(uid)
+    if not DB.is_premium(u):
+        return "15–17 с"
+    return f"{cfg.PLAN_INTERVALS.get(u['best_days'], cfg.DEFAULT_PLAN_INTERVAL):g} с"
+
+
+def cd_block(uid: int):
+    """Проверка личного интервала. -> строка-отказ или None."""
+    last = SEARCH_CD.get(uid)
+    if last is None:
+        return None
+    wait = last + user_interval(uid) - time.monotonic()
+    if wait > 0:
+        return f"Личный интервал: подожди ещё {wait:.0f} с до следующего поиска"
+    return None
 
 
 BACK_MENU = B("◂ В МЕНЮ", "menu")
@@ -243,7 +274,7 @@ def search_kb(uid: int):
 def search_text(uid: int) -> str:
     left, lim = quota(uid, SEL.get(uid, "5"))
     note = "бесплатно · тариф" if fast_free(uid) else f"{cfg.FAST_COST} 💎 за прогон"
-    return ui.search_home(db.user(uid), left, lim, is_prem(uid), note)
+    return ui.search_home(db.user(uid), left, lim, is_prem(uid), note, interval_label(uid))
 
 
 @router.callback_query(F.data == "search")
@@ -365,6 +396,8 @@ async def go(cb: CallbackQuery):
         return await cb.answer("Лимит на 24 часа исчерпан. Premium снимает лимиты.", show_alert=True)
     if uid in BUSY:
         return await cb.answer("Поиск уже идёт…")
+    if (msg := cd_block(uid)):
+        return await cb.answer(msg, show_alert=True)
     BUSY.add(uid)
     await cb.answer()
     try:
@@ -375,6 +408,7 @@ async def go(cb: CallbackQuery):
         res = await pool.hunt(lambda: gen_one(length, **f), want, 600, make_progress(cb.message))
     finally:
         BUSY.discard(uid)
+        SEARCH_CD[uid] = time.monotonic()
     if res["flood"]:
         return await edit(cb, ui.head("⏳", "Лимит Telegram") +
                           "Проверки временно ограничены. Попробуй через пару минут.", back())
@@ -407,6 +441,8 @@ async def fast_go(cb: CallbackQuery):
     if not free_fast and u["diamonds"] < cfg.FAST_COST:
         return await cb.answer(f"Быстрый поиск: {cfg.FAST_COST} 💎 за прогон. Или Premium от "
                                f"{cfg.FAST_MIN_DAYS} дней — тогда бесплатно.", show_alert=True)
+    if (msg := cd_block(uid)):
+        return await cb.answer(msg, show_alert=True)
     BUSY.add(uid)
     await cb.answer()
     try:
@@ -418,6 +454,7 @@ async def fast_go(cb: CallbackQuery):
             db.add(uid, "diamonds", -cfg.FAST_COST)
     finally:
         BUSY.discard(uid)
+        SEARCH_CD[uid] = time.monotonic()
     if res["flood"]:
         return await edit(cb, ui.head("◇", "Лимит Telegram") +
                           "Проверки временно ограничены. Попробуй через пару минут.", back())
@@ -926,7 +963,9 @@ async def tariffs(cb: CallbackQuery):
             "Премиум открывает всё: по слову, ловушка, автопоиск, до "
             f"{cfg.PREMIUM_RESULTS} ников за подбор.\n"
             f"Быстрый поиск: {cfg.FAST_COST} 💎 за прогон, но <b>бесплатно и без счётчика</b> "
-            f"на тарифах от {cfg.FAST_MIN_DAYS} дней.\n\n")
+            f"на тарифах от {cfg.FAST_MIN_DAYS} дней.\n"
+            "Личный интервал между поисками: 15–17 с без подписки → 5 с на пробе → "
+            "3 с от 30 дней → <b>0.5 с НАВСЕГДА</b>.\n\n")
     for key, short, title, days, stars, tag in cfg.PREMIUM_PLANS:
         mark = f"  ◄ <i>{tag}</i>" if tag else ""
         if key == "trial" and u["trial_used"]:
@@ -986,6 +1025,8 @@ async def paid(m: Message):
         db.set(uid, trial_used=1)
     if days >= cfg.FAST_MIN_DAYS:
         db.set(uid, fast_pass=1)   # тарифы от 30 дней: быстрый поиск бесплатно
+    if days > db.user(uid)["best_days"]:
+        db.set(uid, best_days=days)   # лучший купленный тариф — для личного интервала
     life = days >= cfg.LIFETIME_DAYS
     await m.answer(ui.head("▮", "Подписка активирована") +
                    ("<b>НАВСЕГДА.</b> Все ограничения сняты. Пользуйся." if life else
