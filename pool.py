@@ -61,7 +61,7 @@ class Worker:
         self.cool = 0.0
         self.pending = 0
         self.ok = 0
-        self.delay = 0.02 if kind == "bot" else 0.1
+        self.last_call = 0.0
 
 
 class Pool:
@@ -71,6 +71,30 @@ class Pool:
         self.fresh: dict[str, tuple[str, float]] = {}
         self.sem = asyncio.Semaphore(96)
         self.total = 0
+        # глобальный «шлюз темпа»: строгий интервал между запросами одного типа,
+        # иначе Telegram даёт FloodWait всему пулу разом
+        self.pace = {"resolve": cfg.RESOLVE_PACE, "confirm": cfg.CONFIRM_PACE}
+        self._base_pace = dict(self.pace)
+        self._gates = {k: asyncio.Lock() for k in self.pace}
+        self._last = {k: 0.0 for k in self.pace}
+
+    def _tighten(self, kind: str | None):
+        """FloodWait получен — увеличиваем интервал."""
+        if kind:
+            self.pace[kind] = min(self.pace[kind] * 1.5, 10.0)
+
+    def _decay(self, kind: str | None):
+        """Запросы идут чисто — медленно возвращаемся к базовому темпу."""
+        if kind:
+            self.pace[kind] = max(self._base_pace[kind], self.pace[kind] * 0.98)
+
+    async def _gate(self, kind: str):
+        """Пропускает не чаще одного запроса каждые pace[kind] секунд (по всему пулу)."""
+        async with self._gates[kind]:
+            wait = self._last[kind] + self.pace[kind] - time.monotonic()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._last[kind] = time.monotonic()
 
     # ───────── запуск ─────────
     async def start(self):
@@ -120,24 +144,30 @@ class Pool:
         return [w for w in self.workers if w.kind == "user"]
 
     # ───────── низкий уровень ─────────
-    async def _call(self, kinds, factory):
-        """Выполняет запрос на наименее загруженном воркере. -> ('ok', result) | ('err', exc) | ('flood', None)"""
+    async def _call(self, kinds, factory, gate: str | None = None):
+        """Выполняет запрос на наименее загруженном воркере.
+        -> ('ok', result) | ('err', exc) | ('flood', None)"""
         for _ in range(8):
-            now = time.time()
-            cands = [w for w in self.workers if w.kind in kinds and w.cool <= now]
+            cands = [w for w in self.workers if w.kind in kinds and w.cool <= time.time()]
             if not cands:
-                return "flood", None
-            w = min(cands, key=lambda x: x.pending + (3 if x.kind == "user" else 0))  # боты в приоритете
+                soonest = min((w.cool for w in self.workers if w.kind in kinds), default=time.time())
+                await asyncio.sleep(min(max(soonest - time.time(), 0.1), 10))
+                continue
+            w = min(cands, key=lambda x: x.last_call)   # равномерно по всем воркерам
+            if gate:
+                await self._gate(gate)
+            w.last_call = time.monotonic()
             w.pending += 1
             try:
                 async with w.lock:
                     try:
                         r = await w.client(factory())
                         w.ok += 1
-                        await asyncio.sleep(w.delay)
+                        self._decay(gate)
                         return "ok", r
                     except errors.FloodWaitError as e:
                         w.cool = time.time() + e.seconds + 1
+                        self._tighten(gate)
                         log.warning("FloodWait %ss на %s", e.seconds, w.name)
                     except Exception as e:
                         return "err", e
@@ -146,7 +176,8 @@ class Pool:
         return "flood", None
 
     async def _resolve(self, name: str) -> str:
-        st, r = await self._call(("bot", "user"), lambda: functions.contacts.ResolveUsernameRequest(name))
+        st, r = await self._call(("bot", "user"),
+                                 lambda: functions.contacts.ResolveUsernameRequest(name), gate="resolve")
         if st == "flood":
             return "flood"
         if st == "ok":
@@ -161,7 +192,8 @@ class Pool:
     async def _confirm(self, name: str) -> str:
         if not self.users:
             return "free"
-        st, r = await self._call(("user",), lambda: functions.account.CheckUsernameRequest(username=name))
+        st, r = await self._call(("user",),
+                                 lambda: functions.account.CheckUsernameRequest(username=name), gate="confirm")
         if st == "flood":
             return "flood"
         if st == "ok":
@@ -213,7 +245,7 @@ class Pool:
         """source: функция-генератор или список имён (проверяется по порядку).
         -> {'found': [...], 'checked': N, 'flood': bool, 'elapsed': сек}"""
         t0 = time.perf_counter()
-        batch = max(12, min(64, len(self.workers) * 10))
+        batch = max(8, min(24, len(self.workers) * 4))   # темп задаёт шлюз, пачка — лишь очередь
         found, seen, checked, flood = [], set(), 0, False
         idx, tries = 0, 0
         while checked < max_checks and len(found) < want:

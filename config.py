@@ -66,3 +66,7 @@ DIAMOND_PACK_STARS = int(os.getenv("DIAMOND_PACK_STARS", "50"))
 
 TRACK_INTERVAL = 30            # секунд между тиками трекера
 TRACK_SLOW_EVERY = 6           # обычные ники проверяются раз в N тиков, «ловушка» — каждый тик
+
+# ── Темп запросов (защита от FloodWait; при флуде растёт автоматически) ───
+RESOLVE_PACE = float(os.getenv("RESOLVE_PACE", "1.0"))   # сек между resolveUsername по всему пулу
+CONFIRM_PACE = float(os.getenv("CONFIRM_PACE", "1.5"))   # сек между account.checkUsername
