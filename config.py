@@ -68,8 +68,9 @@ TRACK_INTERVAL = 30            # секунд между тиками треке
 TRACK_SLOW_EVERY = 6           # обычные ники проверяются раз в N тиков, «ловушка» — каждый тик
 
 # ── Темп запросов (защита от FloodWait; при флуде растёт автоматически) ───
-RESOLVE_PACE = float(os.getenv("RESOLVE_PACE", "1.0"))   # сек между resolveUsername по всему пулу
-CONFIRM_PACE = float(os.getenv("CONFIRM_PACE", "1.5"))   # сек между account.checkUsername
+# Telegram эскалирует жёстко: 48с → часы → сутки. Не задирать темп!
+RESOLVE_PACE = float(os.getenv("RESOLVE_PACE", "1.2"))   # сек между resolveUsername по всему пулу
+CONFIRM_PACE = float(os.getenv("CONFIRM_PACE", "3.0"))   # сек между account.checkUsername
 
 # ── Быстрый поиск ────────────────────────────────────────────────────────
 FAST_COST = 5                 # 💎 за прогон для тех, у кого нет права бесплатного
