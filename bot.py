@@ -973,16 +973,19 @@ async def tariffs(cb: CallbackQuery):
         else:
             text += f"▸ {short} · <b>{stars} ⭐</b>{mark}\n"
     text += f"\nАлмазы для ультра-поиска: 💎 {cfg.DIAMOND_PACK} · {cfg.DIAMOND_PACK_STARS} ⭐"
-    kb = KB(
-        [B("ПРОБА · 1 ДЕНЬ · 19⭐", "buy:trial")] if not u["trial_used"] else [],
-        [B("7 ДНЕЙ · 50⭐", "buy:d7"), B("14 ДНЕЙ · 75⭐", "buy:d14")],
-        [B("30 ДНЕЙ · 100⭐", "buy:d30")],
-        [B("3 МЕС · 350⭐", "buy:m3"), B("6 МЕС · 400⭐ ◄", "buy:m6")],
-        [B("12 МЕС · 550⭐", "buy:m12"), B("НАВСЕГДА · 999⭐", "buy:life")],
-        [B(f"💎 {cfg.DIAMOND_PACK} АЛМАЗОВ · {cfg.DIAMOND_PACK_STARS}⭐", "buy:diamonds")],
-        [BACK_MENU],
-    )
-    await edit(cb, text, kb)
+    # кнопки строятся из того же конфига — цены меняются в одном месте
+    plans = [(k, s, st, tg) for k, s, tt, d, st, tg in cfg.PREMIUM_PLANS
+             if not (k == "trial" and u["trial_used"])]
+    rows = []
+    if plans and plans[0][0] == "trial":
+        k, s, st, tg = plans.pop(0)
+        rows.append([B(f"ПРОБА · {s} · {st}⭐", f"buy:{k}")])
+    for i in range(0, len(plans), 2):
+        rows.append([B(f"{s} · {st}⭐" + (" ◄" if tg == "выгодно" else ""), f"buy:{k}")
+                     for k, s, st, tg in plans[i:i + 2]])
+    rows.append([B(f"💎 {cfg.DIAMOND_PACK} АЛМАЗОВ · {cfg.DIAMOND_PACK_STARS}⭐", "buy:diamonds")])
+    rows.append([BACK_MENU])
+    await edit(cb, text, KB(*rows))
 
 
 @router.callback_query(F.data.startswith("buy:"))
