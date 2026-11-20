@@ -254,7 +254,8 @@ class DB:
         """)
         for col, ddl in (("ref_by", "INTEGER DEFAULT 0"), ("ref_count", "INTEGER DEFAULT 0"),
                          ("last_daily", "INTEGER DEFAULT 0"), ("streak", "INTEGER DEFAULT 0"),
-                         ("banned", "INTEGER DEFAULT 0"), ("searches", "INTEGER DEFAULT 0")):
+                         ("banned", "INTEGER DEFAULT 0"), ("searches", "INTEGER DEFAULT 0"),
+                         ("trial_used", "INTEGER DEFAULT 0")):
             try:
                 self.c.execute(f"ALTER TABLE users ADD COLUMN {col} {ddl}")
             except sqlite3.OperationalError:

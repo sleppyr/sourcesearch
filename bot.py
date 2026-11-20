@@ -60,8 +60,7 @@ def B(text, data=None, style=None, url=None):
         kw["callback_data"] = data
     if url:
         kw["url"] = url
-    if style and _HAS_STYLE:
-        kw["style"] = style     # success — зелёная, primary — синяя, danger — красная
+    # чёрно-белый стиль: цветные кнопки не используются (style игнорируется)
     return InlineKeyboardButton(**kw)
 
 
@@ -107,10 +106,10 @@ def flt(u) -> dict:
     return {"pin": u["pin"], "digits": bool(u["digits"]), "underscore": bool(u["underscore"])}
 
 
-BACK_MENU = B("← В меню", "menu")
+BACK_MENU = B("◂ В МЕНЮ", "menu")
 
 
-def back(to="search", text="← Назад"):
+def back(to="search", text="◂ НАЗАД"):
     return KB([B(text, to)])
 
 
@@ -173,13 +172,13 @@ router.callback_query.outer_middleware(Guard())
 # ───────────────────────── меню ─────────────────────────
 def menu_kb(uid: int = 0):
     rows = [
-        [B("📊 Оценить", "rate", "primary"), B("🎯 Поиск", "search", "success")],
-        [B("⚖ Сравнение", "cmp"), B("☁ Трекер", "tracker")],
-        [B("🏆 Розыгрыши", "gv"), B("🎁 Бонусы", "bonus")],
-        [B("👤 Профиль", "profile"), B("💎 Тарифы", "tariffs")],
+        [B("ОЦЕНКА", "rate"), B("ПОИСК", "search")],
+        [B("СРАВНЕНИЕ", "cmp"), B("ТРЕКЕР", "tracker")],
+        [B("РОЗЫГРЫШИ", "gv"), B("БОНУСЫ", "bonus")],
+        [B("ПРОФИЛЬ", "profile"), B("ПОДПИСКА", "tariffs")],
     ]
     if uid in cfg.ADMIN_IDS:
-        rows.append([B("🛠 Админка", "admin", "danger")])
+        rows.append([B("АДМИНКА", "admin")])
     return KB(*rows)
 
 
@@ -230,12 +229,12 @@ async def to_menu(cb: CallbackQuery, state: FSMContext):
 def search_kb(uid: int):
     lock = "" if is_prem(uid) else "🔒 "
     return KB(
-        [B("⚡ Быстрый поиск", "fast", "success")],
-        [B("🔥 Подобрать юзернейм", "pick", "primary")],
-        [B(f"{lock}По слову", "gate:word"), B(f"{lock}Ловушка", "gate:trap")],
-        [B("💎 Ультра-поиск · сильный ник сразу", "ultra", "primary")],
-        [B(f"{lock}Автопоиск", "gate:auto")],
-        [B("⚙ Фильтры", "filters"), B("⭐ Избранное", "favs")],
+        [B("⚡ БЫСТРЫЙ ПОИСК", "fast")],
+        [B("◼ ПОДБОР НИКА", "pick")],
+        [B(f"{lock}ПО СЛОВУ", "gate:word"), B(f"{lock}ЛОВУШКА", "gate:trap")],
+        [B("◆ УЛЬТРА-ПОИСК", "ultra")],
+        [B(f"{lock}АВТОПОИСК", "gate:auto")],
+        [B("⚙ ФИЛЬТРЫ", "filters"), B("★ ИЗБРАННОЕ", "favs")],
         [BACK_MENU],
     )
 
@@ -267,7 +266,7 @@ async def gate(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     if not is_prem(uid):
         return await edit(cb, ui.head("🔒", title) + f"{desc}\n\n<blockquote>💎 Доступно только в Premium</blockquote>",
-                          KB([B("💎 Открыть Premium", "tariffs", "primary")], [BACK_MENU]))
+                          KB([B("◼ ОТКРЫТЬ ПОДПИСКУ", "tariffs")], [BACK_MENU]))
     if kind == "word":
         await state.set_state(F_.word)
         await edit(cb, ui.head(icon, title) + "Отправь слово или имя латиницей, я подберу свободные варианты.", back())
@@ -277,10 +276,10 @@ async def gate(cb: CallbackQuery, state: FSMContext):
     else:
         if uid in AUTO and not AUTO[uid].done():
             return await edit(cb, ui.head(icon, title) + "Автопоиск уже запущен.",
-                              KB([B("⏹ Стоп", "auto:stop", "danger")], [BACK_MENU]))
+                              KB([B("✕ СТОП", "auto:stop")], [BACK_MENU]))
         AUTO[uid] = asyncio.create_task(auto_loop(cb.bot, uid, cb.message.chat.id))
         await edit(cb, ui.head(icon, title) + f"Запущен. Длина <b>{cur_len(uid)}</b>, находки приходят сюда.",
-                   KB([B("⏹ Стоп", "auto:stop", "danger")], [BACK_MENU]))
+                   KB([B("✕ СТОП", "auto:stop")], [BACK_MENU]))
 
 
 @router.callback_query(F.data == "auto:stop")
@@ -310,12 +309,12 @@ def pick_kb(uid: int):
     def lbl(key, name):
         return f"✓ {name} · {qtxt(uid, key)}" if b == key else name
 
-    custom = f"Своя длина ({CUSTOM[uid]})" if uid in CUSTOM else "Своя длина (7–15)"
+    custom = f"СВОЯ ДЛИНА ({CUSTOM[uid]})" if uid in CUSTOM else "СВОЯ ДЛИНА (7–15)"
     return KB(
-        [B(lbl("5", "5 символов"), "len:5"), B(lbl("6", "6 символов"), "len:6")],
+        [B(lbl("5", "5 СИМВОЛОВ"), "len:5"), B(lbl("6", "6 СИМВОЛОВ"), "len:6")],
         [B(("✓ " if b == "custom" else "") + custom, "len:custom")],
-        [B("🔥 Начать поиск", "go", "success")],
-        [B("← Назад", "search")],
+        [B("◼ НАЧАТЬ ПОИСК", "go")],
+        [B("◂ НАЗАД", "search")],
     )
 
 
@@ -350,8 +349,8 @@ async def got_len(m: Message, state: FSMContext):
 
 
 def result_kb(names):
-    rows = [[B(f"📊 @{n}", f"rate:{n}"), B("⭐", f"fav:{n}")] for n in names]
-    rows.append([B("🔁 Ещё", "go", "success"), B("← Назад", "search")])
+    rows = [[B(f"ОЦЕНИТЬ @{n}", f"rate:{n}"), B("★", f"fav:{n}")] for n in names]
+    rows.append([B("◼ ЕЩЁ", "go"), B("◂ НАЗАД", "search")])
     return KB(*rows)
 
 
@@ -380,7 +379,7 @@ async def go(cb: CallbackQuery):
     if not res["found"]:
         return await edit(cb, ui.head("😕", "Ничего не найдено") +
                           f"Проверено <b>{res['checked']}</b> за {res['elapsed']:.1f} с. Попробуй ещё раз.",
-                          KB([B("🔁 Ещё", "go", "success")], [B("← Назад", "search")]))
+                          KB([B("◼ ЕЩЁ", "go")], [B("◂ НАЗАД", "search")]))
     if left is not None:
         db.add_usage(uid, b)
     n = len(res["found"])
@@ -448,16 +447,16 @@ async def ultra(cb: CallbackQuery):
     await cb.answer()
     c6, c5 = cfg.ULTRA_COST[6], cfg.ULTRA_COST[5]
     await edit(cb,
-               ui.head("💎", "Ультра-поиск") +
-               "Один гарантированно сильный ник: стилизация или склейка настоящих слов. "
+               ui.head("◆", "Ультра-поиск") +
+               "Один гарантированно сильный ник: брендовая склейка или стилизация. "
                "Свободен на момент выдачи.\n\n"
                f"▸ 6 букв · оценка от {cfg.ULTRA_MIN_SCORE[6]} · 💎 <b>{c6}</b>\n"
                f"▸ 5 букв · оценка от {cfg.ULTRA_MIN_SCORE[5]} · 💎 <b>{c5}</b>\n\n"
                f"Твои алмазы  💎 <b>{u['diamonds']}</b>"
                + ("\n<i>Админ: бесплатно</i>" if cb.from_user.id in cfg.ADMIN_IDS else ""),
-               KB([B(f"6 букв · {c6} 💎", "ultra:6", "primary"), B(f"5 букв · {c5} 💎", "ultra:5", "primary")],
-                  [B("➕ Купить алмазы", "buy:diamonds")],
-                  [B("← Назад", "search")]))
+               KB([B(f"6 БУКВ · {c6} 💎", "ultra:6"), B(f"5 БУКВ · {c5} 💎", "ultra:5")],
+                  [B("КУПИТЬ АЛМАЗЫ", "buy:diamonds")],
+                  [B("◂ НАЗАД", "search")]))
 
 
 @router.callback_query(F.data.startswith("ultra:"))
@@ -477,9 +476,9 @@ async def ultra_go(cb: CallbackQuery):
         res = await pool.hunt(cands, 1, len(cands) or 1, make_progress(cb.message))
     finally:
         BUSY.discard(uid)
-    kb_back = back("ultra")
+    kb_back = back("ultra", "◂ К УЛЬТРА")
     if not res["found"]:
-        return await edit(cb, ui.head("🔒", "Сейф пуст") +
+        return await edit(cb, ui.head("◇", "Сейф пуст") +
                           "Свободных сильных ников сейчас нет, скоро пополнится.\n<i>Алмазы не списаны.</i>", kb_back)
     name = res["found"][0]
     if cost:
@@ -489,7 +488,7 @@ async def ultra_go(cb: CallbackQuery):
     extra = f"\nсклейка: <b>{sw[0]} + {sw[1]}</b>" if sw else ("\nнастоящее слово" if name in WORDS else "")
     await edit(cb, ui.result_card([name], res["checked"], res["elapsed"], "", extra) +
                (f"\n▸ Списано  💎 <b>{cost}</b>" if cost else ""),
-               KB([B("📊 Оценить", f"rate:{name}", "primary"), B("⭐", f"fav:{name}")], [B("← Назад", "ultra")]))
+               KB([B(f"ОЦЕНИТЬ @{name}", f"rate:{name}"), B("★", f"fav:{name}")], [B("◂ НАЗАД", "ultra")]))
 
 
 # ───────────────────────── фильтры ─────────────────────────
@@ -501,10 +500,10 @@ def filters_view(uid: int):
             f"▸ Начало ника   <b>{u['pin'] or '—'}</b>  ({len(u['pin'])}/{lim})\n"
             f"▸ Цифры            <b>{on(u['digits'])}</b>\n"
             f"▸ Подчёркивание  <b>{on(u['underscore'])}</b>")
-    kb = KB([B("📌 Закрепить буквы", "f:pin")],
-            [B(f"🔢 Цифры: {on(u['digits'])}", "f:digits"), B(f"＿ Подчёрк.: {on(u['underscore'])}", "f:us")],
-            [B("🧹 Сбросить", "f:reset")],
-            [B("← Назад", "search")])
+    kb = KB([B("ЗАКРЕПИТЬ БУКВЫ", "f:pin")],
+            [B(f"ЦИФРЫ: {on(u['digits'])}", "f:digits"), B(f"ПОДЧЁРК.: {on(u['underscore'])}", "f:us")],
+            [B("СБРОС", "f:reset")],
+            [B("◂ НАЗАД", "search")])
     return text, kb
 
 
@@ -607,7 +606,7 @@ def tracker_view(uid: int):
             f"▸ Слоты  {ui.bar(len(rows), lim)}  <b>{len(rows)}</b>/{lim}\n\n" +
             ("\n".join(f"{'🪤' if r['fast'] else '•'} <code>@{r['username']}</code>" for r in rows) or "<i>Пока пусто</i>"))
     kb = KB(*[[B(f"✕ @{r['username']}", f"trk:del:{r['id']}")] for r in rows],
-            [B("➕ Добавить ник", "trk:add", "success")], [BACK_MENU])
+            [B("＋ ДОБАВИТЬ НИК", "trk:add")], [BACK_MENU])
     return text, kb
 
 
@@ -692,10 +691,10 @@ async def favs(cb: CallbackQuery):
     await cb.answer()
     text = ui.head("⭐", "Избранное") + ("\n".join(f"<code>@{n}</code> · {score(n)}/100" for n in items[:30])
                                           or "<i>Пока пусто. Жми ⭐ под найденными никами.</i>")
-    rows = [[B(f"📊 @{n}", f"rate:{n}")] for n in items[:6]]
+    rows = [[B(f"ОЦЕНИТЬ @{n}", f"rate:{n}")] for n in items[:6]]
     if items:
-        rows.append([B("🧹 Очистить", "favs:clear")])
-    await edit(cb, text, KB(*rows, [B("← Назад", "search")]))
+        rows.append([B("ОЧИСТИТЬ", "favs:clear")])
+    await edit(cb, text, KB(*rows, [B("◂ НАЗАД", "search")]))
 
 
 @router.callback_query(F.data == "favs:clear")
@@ -717,9 +716,9 @@ def bonus_view(uid: int):
             f"▸ Монеты   🪙 <b>{u['coins']}</b>   Алмазы  💎 <b>{u['diamonds']}</b>\n"
             f"▸ Друзья   👥 <b>{u['ref_count']}</b>\n\n"
             f"<blockquote>На 7-й день серии — +1 💎. Обмен: {cfg.COINS_PER_DIAMOND} 🪙 = 1 💎</blockquote>")
-    kb = KB([B("✅ Бонус получен сегодня" if done else "🎁 Забрать бонус дня", "daily", None if done else "success")],
-            [B("👥 Пригласить друзей", "refs"), B("🎟 Промокод", "promo")],
-            [B(f"🪙 → 💎  обмен ({cfg.COINS_PER_DIAMOND} монет)", "exch")],
+    kb = KB([B("БОНУС ПОЛУЧЕН СЕГОДНЯ" if done else "ЗАБРАТЬ БОНУС ДНЯ", "daily")],
+            [B("ПРИГЛАСИТЬ", "refs"), B("ПРОМОКОД", "promo")],
+            [B(f"ОБМЕН {cfg.COINS_PER_DIAMOND} 🪙 → 1 💎", "exch")],
             [BACK_MENU])
     return text, kb
 
@@ -804,8 +803,8 @@ async def gv(cb: CallbackQuery):
         pass   # повторный ответ при обновлении после «Участвовать»
     text = ui.head("🏆", "Розыгрыши", "призы: NFT-юзернеймы и Premium") + (
         "\n\n".join(gv_card(g, uid) for g in items) or "<i>Сейчас активных розыгрышей нет. Загляни позже.</i>")
-    rows = [[B(("✅ Вы участвуете" if uid in db.gv_parts(g['id']) else "🎟 Участвовать") + f" · {g['title'][:22]}", f"gv:join:{g['id']}",
-               None if uid in db.gv_parts(g["id"]) else "success")] for g in items]
+    rows = [[B(("✓ УЧАСТВУЕШЬ" if uid in db.gv_parts(g['id']) else "◼ УЧАСТВОВАТЬ") + f" · {g['title'][:22]}", f"gv:join:{g['id']}")]
+            for g in items]
     await edit(cb, text, KB(*rows, [BACK_MENU]))
 
 
@@ -864,8 +863,9 @@ async def giveaway_loop(bot: Bot):
 async def profile(cb: CallbackQuery):
     uid = cb.from_user.id
     u = db.user(uid)
-    prem = ("👑 администратор" if uid in cfg.ADMIN_IDS else
-            f"👑 до {time.strftime('%d.%m.%Y', time.localtime(u['premium_until']))}" if DB.is_premium(u) else "нет")
+    prem = ("администратор" if uid in cfg.ADMIN_IDS else
+            "навсегда" if u["premium_until"] > time.time() + 10 * 365 * 86400 else
+            f"до {time.strftime('%d.%m.%Y', time.localtime(u['premium_until']))}" if DB.is_premium(u) else "нет")
     await cb.answer()
     await edit(cb, ui.head("👤", "Профиль", f"ID {uid}") +
                f"▸ Premium      <b>{prem}</b>\n▸ Алмазы       💎 <b>{u['diamonds']}</b>\n▸ Монеты       🪙 <b>{u['coins']}</b>\n"
@@ -878,28 +878,42 @@ async def profile(cb: CallbackQuery):
 @router.callback_query(F.data == "tariffs")
 async def tariffs(cb: CallbackQuery):
     await cb.answer()
-    await edit(cb,
-               ui.head("💎", "Тарифы") +
-               "<b>Free</b>\n"
-               f"▸ Без лимитов · до {cfg.FREE_RESULTS} ников за подбор\n"
-               f"▸ Трекер · {cfg.FREE_TRACK_SLOTS} слота\n\n"
-               f"<b>👑 Premium · {cfg.PREMIUM_DAYS} дней</b>\n▸ До {cfg.PREMIUM_RESULTS} ников за подбор\n"
-               "▸ По слову · Ловушка · Автопоиск\n"
-               f"▸ Трекер {cfg.PREMIUM_TRACK_SLOTS} слотов · избранное {cfg.PREMIUM_FAV_SLOTS}\n"
-               f"▸ Закрепление до {cfg.PREMIUM_PIN_LETTERS} букв",
-               KB([B(f"👑 Premium · {cfg.PREMIUM_STARS} ⭐", "buy:premium", "primary")],
-                  [B(f"💎 {cfg.DIAMOND_PACK} алмазов · {cfg.DIAMOND_PACK_STARS} ⭐", "buy:diamonds")],
-                  [BACK_MENU]))
+    u = db.user(cb.from_user.id)
+    text = (ui.head("▮", "Подписка") +
+            "Премиум открывает всё: авто-подборы без ограничений, по слову, ловушка, автопоиск, "
+            f"до {cfg.PREMIUM_RESULTS} ников за подбор.\n\n")
+    for key, short, title, days, stars, tag in cfg.PREMIUM_PLANS:
+        mark = f"  ◄ <i>{tag}</i>" if tag else ""
+        if key == "trial" and u["trial_used"]:
+            text += f"▸ {short} · {stars} ⭐ — <i>уже использована</i>\n"
+        else:
+            text += f"▸ {short} · <b>{stars} ⭐</b>{mark}\n"
+    text += f"\nАлмазы для ультра-поиска: 💎 {cfg.DIAMOND_PACK} · {cfg.DIAMOND_PACK_STARS} ⭐"
+    kb = KB(
+        [B("ПРОБА · 1 ДЕНЬ · 19⭐", "buy:trial")] if not u["trial_used"] else [],
+        [B("7 ДНЕЙ · 50⭐", "buy:d7"), B("14 ДНЕЙ · 75⭐", "buy:d14")],
+        [B("30 ДНЕЙ · 100⭐", "buy:d30")],
+        [B("3 МЕС · 350⭐", "buy:m3"), B("6 МЕС · 400⭐ ◄", "buy:m6")],
+        [B("12 МЕС · 550⭐", "buy:m12"), B("НАВСЕГДА · 999⭐", "buy:life")],
+        [B(f"💎 {cfg.DIAMOND_PACK} АЛМАЗОВ · {cfg.DIAMOND_PACK_STARS}⭐", "buy:diamonds")],
+        [BACK_MENU],
+    )
+    await edit(cb, text, kb)
 
 
 @router.callback_query(F.data.startswith("buy:"))
 async def buy(cb: CallbackQuery):
     kind = cb.data.split(":")[1]
     await cb.answer()
-    if kind == "premium":
-        title, amount = f"Premium на {cfg.PREMIUM_DAYS} дней", cfg.PREMIUM_STARS
-    else:
+    if kind == "diamonds":
         title, amount = f"{cfg.DIAMOND_PACK} алмазов", cfg.DIAMOND_PACK_STARS
+    else:
+        p = cfg.PREMIUM_PLANS_D.get(kind)
+        if not p:
+            return
+        _, _, title, _, amount, _ = p
+        if kind == "trial" and db.user(cb.from_user.id)["trial_used"]:
+            return await cb.answer("Пробная подписка выдаётся один раз. Она уже использована.", show_alert=True)
     await cb.message.answer_invoice(title=title, description=f"SourceSearch · {title}", payload=kind,
                                     provider_token="", currency="XTR",
                                     prices=[LabeledPrice(label=title, amount=amount)])
@@ -912,26 +926,38 @@ async def pre_checkout(q: PreCheckoutQuery):
 
 @router.message(F.successful_payment)
 async def paid(m: Message):
-    if m.successful_payment.invoice_payload == "premium":
-        db.add_premium(m.from_user.id, cfg.PREMIUM_DAYS)
-        await m.answer(ui.head("👑", "Premium активирован") + "Спасибо! Все лимиты сняты.", reply_markup=KB([BACK_MENU]))
-    else:
-        db.add(m.from_user.id, "diamonds", cfg.DIAMOND_PACK)
-        await m.answer(ui.head("💎", "Алмазы начислены") + f"+{cfg.DIAMOND_PACK} 💎", reply_markup=KB([BACK_MENU]))
+    uid = m.from_user.id
+    p = m.successful_payment.invoice_payload
+    if p == "diamonds":
+        db.add(uid, "diamonds", cfg.DIAMOND_PACK)
+        return await m.answer(ui.head("▮", "Алмазы зачислены") + f"+{cfg.DIAMOND_PACK} 💎",
+                              reply_markup=KB([BACK_MENU]))
+    plan = cfg.PREMIUM_PLANS_D.get(p)
+    if not plan:
+        return
+    _, _, title, days, _, _ = plan
+    db.add_premium(uid, days)
+    if p == "trial":
+        db.set(uid, trial_used=1)
+    life = days >= cfg.LIFETIME_DAYS
+    await m.answer(ui.head("▮", "Подписка активирована") +
+                   ("<b>НАВСЕГДА.</b> Все ограничения сняты. Пользуйся." if life else
+                    f"<b>{title.upper()}</b>\nВсе ограничения сняты на {days} дн. Не подведи."),
+                   reply_markup=KB([BACK_MENU]))
 
 
 # ───────────────────────── админка ─────────────────────────
 def admin_kb():
-    return KB([B("📈 Статистика", "adm:stats"), B("⚙ Воркеры", "adm:workers")],
-              [B("👑 Выдать Premium", "adm:prem", "success"), B("🚫 Снять Premium", "adm:rev", "danger")],
-              [B("💎 Выдать алмазы", "adm:dia", "primary"), B("🔎 Инфо о юзере", "adm:info")],
-              [B("⛔ Бан", "adm:ban"), B("✅ Разбан", "adm:unban")],
-              [B("🎟 Промокод", "adm:promo"), B("🏆 Розыгрыш", "adm:gv")],
-              [B("📣 Рассылка", "adm:bc")],
+    return KB([B("СТАТИСТИКА", "adm:stats"), B("ВОРКЕРЫ", "adm:workers")],
+              [B("ВЫДАТЬ PREMIUM", "adm:prem"), B("СНЯТЬ PREMIUM", "adm:rev")],
+              [B("ВЫДАТЬ АЛМАЗЫ", "adm:dia"), B("ИНФО О ЮЗЕРЕ", "adm:info")],
+              [B("БАН", "adm:ban"), B("РАЗБАН", "adm:unban")],
+              [B("ПРОМОКОД", "adm:promo"), B("РОЗЫГРЫШ", "adm:gv")],
+              [B("РАССЫЛКА", "adm:bc")],
               [BACK_MENU])
 
 
-ADMIN_TEXT = ui.head("🛠", "Админка", "вы пользуетесь ботом без лимитов и бесплатно")
+ADMIN_TEXT = ui.head("▮", "Админка", "полный доступ · без лимитов")
 ADM_PROMPTS = {
     "prem": "Отправь: <code>ID дни</code>\nПример: <code>123456789 30</code>",
     "rev": "Отправь ID пользователя, у которого снять Premium.",
